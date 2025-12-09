@@ -1,9 +1,8 @@
-import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import '../models/message.dart';
 import '../../../core/config/api_config.dart';
+import 'package:anthropic_sdk_dart/anthropic_sdk_dart.dart' as anthropic_sdk;
 
 /// Service to handle AI chat interactions with Claude API
 class ChatService {
@@ -14,8 +13,9 @@ class ChatService {
   
   /// Send a message and get a response from Claude API
   Future<Message> sendMessage(String text, String conversationId) async {
-    // Check if using mock mode or if API key is not set
-    if (_useMockMode || ApiConfig.claudeApiKey.isEmpty || 
+    // If mock mode is enabled, or Claude usage is disabled in config, or
+    // the Claude API key is not set, return a mock response.
+    if (_useMockMode || !ApiConfig.useClaude || ApiConfig.claudeApiKey.isEmpty ||
         ApiConfig.claudeApiKey == 'YOUR_CLAUDE_API_KEY_HERE') {
       return _generateMockResponse(text);
     }
@@ -38,44 +38,83 @@ class ChatService {
     }
   }
   
-  /// Call Claude API
+  /// Call Claude API using the Anthropic SDK
   Future<String> _callClaudeApi(String userMessage) async {
-    final response = await http.post(
-      Uri.parse(ApiConfig.claudeApiUrl),
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ApiConfig.claudeApiKey,
-        'anthropic-version': ApiConfig.claudeApiVersion,
-      },
-      body: jsonEncode({
-        'model': ApiConfig.defaultModel,
-        'max_tokens': ApiConfig.maxTokens,
-        'messages': [
-          {
-            'role': 'user',
-            'content': userMessage,
-          }
+    try {
+      final client = anthropic_sdk.AnthropicClient(apiKey: ApiConfig.claudeApiKey);
+
+      final req = anthropic_sdk.CreateMessageRequest(
+        model: anthropic_sdk.Model.modelId(ApiConfig.defaultModel),
+        maxTokens: ApiConfig.maxTokens,
+        messages: [
+          anthropic_sdk.Message(
+            role: anthropic_sdk.MessageRole.user,
+            content: anthropic_sdk.MessageContent.text(userMessage),
+          ),
         ],
-      }),
-    );
-    
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final content = data['content'] as List;
-      if (content.isNotEmpty && content[0]['type'] == 'text') {
-        return content[0]['text'] as String;
+      );
+
+      final res = await client.createMessage(request: req);
+      final text = res.content.text;
+      if (text.isNotEmpty) {
+        return text;
       }
-      throw Exception('Unexpected response format');
-    } else {
-      throw Exception('API request failed: ${response.statusCode} - ${response.body}');
+      throw Exception('Received empty response from Claude API');
+    } catch (e) {
+      // SDK call failed or empty response
+      throw Exception('Claude API error: $e');
     }
   }
   
-  /// Simulate streaming response (for future implementation)
-  Stream<String> streamResponse(String text) async* {
-    final response = _generateResponseText(text);
+  /// Stream response from Claude API using the Anthropic SDK
+  Stream<String> streamResponse(String userMessage) async* {
+    // If mock mode is enabled or Claude usage is disabled, use mock streaming
+    if (_useMockMode || !ApiConfig.useClaude || ApiConfig.claudeApiKey.isEmpty ||
+        ApiConfig.claudeApiKey == 'YOUR_CLAUDE_API_KEY_HERE') {
+      yield* _streamMockResponse(userMessage);
+      return;
+    }
+
+    try {
+      final client = anthropic_sdk.AnthropicClient(apiKey: ApiConfig.claudeApiKey);
+
+      final req = anthropic_sdk.CreateMessageRequest(
+        model: anthropic_sdk.Model.modelId(ApiConfig.defaultModel),
+        maxTokens: ApiConfig.maxTokens,
+        messages: [
+          anthropic_sdk.Message(
+            role: anthropic_sdk.MessageRole.user,
+            content: anthropic_sdk.MessageContent.text(userMessage),
+          ),
+        ],
+      );
+
+      final stream = client.createMessageStream(request: req);
+      await for (final event in stream) {
+        // Use pattern matching to handle different event types
+        if (event is anthropic_sdk.ContentBlockDeltaEvent) {
+          try {
+            final deltaText = event.delta.text;
+            if (deltaText.isNotEmpty) {
+              yield deltaText;
+            }
+          } catch (_) {
+            // Ignore errors extracting text from delta
+          }
+        }
+      }
+    } catch (e) {
+      print('Claude stream error: $e');
+      // Fall back to mock streaming on error
+      yield* _streamMockResponse(userMessage);
+    }
+  }
+
+  /// Mock streaming response
+  Stream<String> _streamMockResponse(String userText) async* {
+    final response = _generateResponseText(userText);
     final words = response.split(' ');
-    
+
     for (final word in words) {
       await Future.delayed(Duration(milliseconds: 50 + _random.nextInt(100)));
       yield '$word ';
