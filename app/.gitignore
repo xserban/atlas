@@ -45,7 +45,7 @@ app.*.map.json
 /android/app/release
 
 # API Keys and Secrets
-lib/core/config/api_config.dart
+# lib/core/config/api_config.dart
 
 # Environment files
 .env
