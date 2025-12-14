@@ -19,8 +19,8 @@ class ChatRequest(BaseModel):
     """Request model for chat messages."""
     message: str
     conversation_history: Optional[List[MessageContent]] = None
-    model: str = "claude-3-5-sonnet-20241022"
-    max_tokens: int = 4096
+    model: str = config.CLAUDE_DEFAULT_MODEL
+    max_tokens: int = config.CLAUDE_MAX_TOKENS
 
 
 class ChatResponse(BaseModel):
